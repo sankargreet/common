@@ -1,47 +1,71 @@
 using Amazon.S3;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
-public class MultiPartDownloader
+class Program
 {
-    private readonly IAmazonS3 _s3Client;
-    private readonly string _bucketName;
-    private readonly string _objectKey;
-    private readonly long _chunkSize;
-    private readonly string _downloadFolder;
+    private static readonly IAmazonS3 _s3Client; // Replace with your S3 client instance
+    private static readonly string _bucketName = "your-bucket-name"; // Replace with your bucket name
+    private static readonly string _objectKey = "your-object-key"; // Replace with your object key
+    private static readonly long _chunkSize = 1024; // Adjust chunk size as needed
+    private static readonly string _downloadFolder = "downloaded_chunks";
 
-    public MultiPartDownloader(IAmazonS3 s3Client, string bucketName, string objectKey, long chunkSize, string downloadFolder)
+    static async Task Main(string[] args)
     {
-        _s3Client = s3Client;
-        _bucketName = bucketName;
-        _objectKey = objectKey;
-        _chunkSize = chunkSize;
-        _downloadFolder = downloadFolder;
+        Console.WriteLine("Downloading S3 object in chunks...");
 
-        // Ensure the download folder exists
-        Directory.CreateDirectory(_downloadFolder);
-    }
-
-    public async Task Download()
-    {
-        GetObjectRequest request = new GetObjectRequest
+        try
         {
-            BucketName = _bucketName,
-            Key = _objectKey
-        };
+            // Ensure download folder exists
+            Directory.CreateDirectory(_downloadFolder);
 
-        using (GetObjectResponse response = await _s3Client.GetObjectAsync(request))
+            var downloader = new MultiPartDownloader(_s3Client, _bucketName, _objectKey, _chunkSize, _downloadFolder);
+            await downloader.Download();
+
+            Console.WriteLine("Download complete!");
+        }
+        catch (Exception ex)
         {
-            using (Stream responseStream = response.ResponseStream)
-            {
-                using (ChunkReader reader = new ChunkReader(responseStream, _chunkSize))
-                {
-                    int chunkNumber = 1;
-                    string chunk;
-                    while ((chunk = await reader.ReadNextChunk()) != null)
-                    {
-                        await SaveChunkToFile(chunk, chunkNumber);
+            Console.Error.WriteLine(<span class="math-inline">"Error downloading object\: \{ex\.Message\}"\);
+\}
+\}
+\}
+public class MultiPartDownloader
+\{
+private readonly IAmazonS3 \_s3Client;
+private readonly string \_bucketName;
+private readonly string \_objectKey;
+private readonly long \_chunkSize;
+private readonly string \_downloadFolder;
+public MultiPartDownloader\(IAmazonS3 s3Client, string bucketName, string objectKey, long chunkSize, string downloadFolder\)
+\{
+\_s3Client \= s3Client;
+\_bucketName \= bucketName;
+\_objectKey \= objectKey;
+\_chunkSize \= chunkSize;
+\_downloadFolder \= downloadFolder;
+\}
+public async Task Download\(\)
+\{
+GetObjectRequest request \= new GetObjectRequest
+\{
+BucketName \= \_bucketName,
+Key \= \_objectKey
+\};
+using \(GetObjectResponse response \= await \_s3Client\.GetObjectAsync\(request\)\)
+\{
+using \(Stream responseStream \= response\.ResponseStream\)
+\{
+using \(ChunkReader reader \= new ChunkReader\(responseStream, \_chunkSize\)\)
+\{
+int chunkNumber \= 1;
+string chunk;
+while \(\(chunk \= await reader\.ReadNextChunk\(\)\) \!\= null\)
+\{
+await SaveChunkToFile\(chunk, chunkNumber\);
+Console\.WriteLine\(</span>"Downloaded chunk {chunkNumber}");
                         chunkNumber++;
                     }
                 }
@@ -57,25 +81,19 @@ public class MultiPartDownloader
             await writer.WriteAsync(chunk);
         }
     }
-
-    private async Task ProcessChunk(string chunk)
-    {
-        // Optional: You can still implement in-memory processing logic here if needed
-        // ...
-    }
 }
 
 public class ChunkReader
 {
     private readonly Stream _stream;
     private readonly long _chunkSize;
-    private readonly StringBuilder _buffer;
+    private readonly byte[] _buffer;
 
     public ChunkReader(Stream stream, long chunkSize)
     {
         _stream = stream;
         _chunkSize = chunkSize;
-        _buffer = new StringBuilder();
+        _buffer = new byte[chunkSize];
     }
 
     public async Task<string> ReadNextChunk()
@@ -84,34 +102,23 @@ public class ChunkReader
 
         while (_stream.CanRead && bytesToRead > 0)
         {
-            int nextByte = await _stream.PeekAsync();
-            if (nextByte == -1) // End of stream
+            int bytesRead = await _stream.ReadAsync(_buffer, 0, (int)Math.Min(bytesToRead, _buffer.Length));
+            if (bytesRead == 0) // End of stream
             {
                 break;
             }
 
-            char nextChar = (char)nextByte;
-            _buffer.Append(nextChar);
+            string chunkData = Encoding.UTF8.GetString(_buffer, 0, bytesRead); // Adjust encoding based on your data
+            int newlinePos = chunkData.IndexOf('\n');
 
-            if (nextChar == '\n') // Complete line encountered
+            if (newlinePos >= 0)
             {
-                string chunk = _buffer.ToString();
-                _buffer.Clear();
+                string chunk = chunkData.Substring(0, newlinePos + 1);
                 return chunk;
             }
 
-            await _stream.ReadByteAsync(); // Consume the byte after peeking
-            bytesToRead--;
+            bytesToRead -= bytesRead;
         }
 
         // Handle remaining data in the buffer if not a complete line
-        if (_buffer.Length > 0)
-        {
-            string remainingChunk = _buffer.ToString();
-            _buffer.Clear();
-            return remainingChunk;
-        }
-
-        return null; // No more data available
-    }
-}
+        if (_stream.Position < _
