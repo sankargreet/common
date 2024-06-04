@@ -38,6 +38,7 @@ class S3FileChunkDownloader
                 {
                     AdjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
                     totalBytesRead += lastNewlinePosition;
+                    responseStream.Position = totalBytesRead; // Set the stream position to after the last complete line
                 }
                 else
                 {
