@@ -35,17 +35,7 @@ class S3FileChunkDownloader
 
                 long bytesReadInChunk = await WriteChunkToFile(responseStream, chunkFilePath, bytesToRead);
 
-                long lastNewlinePosition = GetLastNewlinePosition(chunkFilePath);
-                if (lastNewlinePosition < bytesReadInChunk)
-                {
-                    AdjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
-                    totalBytesRead += lastNewlinePosition;
-                }
-                else
-                {
-                    totalBytesRead += bytesReadInChunk;
-                }
-
+                totalBytesRead += bytesReadInChunk;
                 chunkNumber++;
             }
         }
@@ -76,18 +66,17 @@ class S3FileChunkDownloader
             int bytesRead;
             while (bytesReadInChunk < bytesToRead && (bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
             {
-                bytesReadInChunk += bytesRead;
-
                 // Search for the last newline character in the buffer
                 for (int i = 0; i < bytesRead; i++)
                 {
                     if (buffer[i] == '\n')
                     {
-                        lastNewlinePosition = bytesReadInChunk - (bytesRead - i - 1);
+                        lastNewlinePosition = bytesReadInChunk + i + 1; // Position after the newline
                     }
                 }
 
                 await fileStream.WriteAsync(buffer, 0, bytesRead);
+                bytesReadInChunk += bytesRead;
             }
         }
 
