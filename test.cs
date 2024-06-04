@@ -1,124 +1,115 @@
+using Amazon;
 using Amazon.S3;
+using Amazon.S3.Model;
 using System;
 using System.IO;
-using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 
-class Program
+class S3FileChunkDownloader
 {
-    private static readonly IAmazonS3 _s3Client; // Replace with your S3 client instance
-    private static readonly string _bucketName = "your-bucket-name"; // Replace with your bucket name
-    private static readonly string _objectKey = "your-object-key"; // Replace with your object key
-    private static readonly long _chunkSize = 1024; // Adjust chunk size as needed
-    private static readonly string _downloadFolder = "downloaded_chunks";
+    private static readonly string bucketName = "your-bucket-name";
+    private static readonly string objectKey = "your-large-file.txt";
+    private static readonly string region = "us-east-1"; // Replace with your region
+    private static readonly long chunkSize = 512 * 1024 * 1024; // 0.5 GB in bytes
 
-    static async Task Main(string[] args)
+    public static async Task Main(string[] args)
     {
-        Console.WriteLine("Downloading S3 object in chunks...");
+        var s3Client = new AmazonS3Client(RegionEndpoint.GetBySystemName(region));
+        await DownloadFileInChunksAsync(s3Client);
+    }
 
-        try
+    private static async Task DownloadFileInChunksAsync(AmazonS3Client s3Client)
+    {
+        long fileSize = await GetFileSizeAsync(s3Client);
+        long totalBytesRead = 0;
+        int chunkNumber = 0;
+
+        using (var response = await s3Client.GetObjectAsync(bucketName, objectKey))
+        using (var responseStream = response.ResponseStream)
         {
-            // Ensure download folder exists
-            Directory.CreateDirectory(_downloadFolder);
+            while (totalBytesRead < fileSize)
+            {
+                string chunkFilePath = $"chunk_{chunkNumber}.txt";
+                long bytesReadInChunk = await WriteChunkToFile(responseStream, chunkFilePath, chunkSize);
 
-            var downloader = new MultiPartDownloader(_s3Client, _bucketName, _objectKey, _chunkSize, _downloadFolder);
-            await downloader.Download();
+                long lastNewlinePosition = GetLastNewlinePosition(chunkFilePath);
+                if (lastNewlinePosition < bytesReadInChunk)
+                {
+                    AdjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
+                    totalBytesRead += lastNewlinePosition;
+                }
+                else
+                {
+                    totalBytesRead += bytesReadInChunk;
+                }
 
-            Console.WriteLine("Download complete!");
+                chunkNumber++;
+            }
         }
-        catch (Exception ex)
+
+        Console.WriteLine("Chunks downloaded successfully.");
+    }
+
+    private static async Task<long> GetFileSizeAsync(AmazonS3Client s3Client)
+    {
+        var metadataRequest = new GetObjectMetadataRequest
         {
-            Console.Error.WriteLine(<span class="math-inline">"Error downloading object\: \{ex\.Message\}"\);
-\}
-\}
-\}
-public class MultiPartDownloader
-\{
-private readonly IAmazonS3 \_s3Client;
-private readonly string \_bucketName;
-private readonly string \_objectKey;
-private readonly long \_chunkSize;
-private readonly string \_downloadFolder;
-public MultiPartDownloader\(IAmazonS3 s3Client, string bucketName, string objectKey, long chunkSize, string downloadFolder\)
-\{
-\_s3Client \= s3Client;
-\_bucketName \= bucketName;
-\_objectKey \= objectKey;
-\_chunkSize \= chunkSize;
-\_downloadFolder \= downloadFolder;
-\}
-public async Task Download\(\)
-\{
-GetObjectRequest request \= new GetObjectRequest
-\{
-BucketName \= \_bucketName,
-Key \= \_objectKey
-\};
-using \(GetObjectResponse response \= await \_s3Client\.GetObjectAsync\(request\)\)
-\{
-using \(Stream responseStream \= response\.ResponseStream\)
-\{
-using \(ChunkReader reader \= new ChunkReader\(responseStream, \_chunkSize\)\)
-\{
-int chunkNumber \= 1;
-string chunk;
-while \(\(chunk \= await reader\.ReadNextChunk\(\)\) \!\= null\)
-\{
-await SaveChunkToFile\(chunk, chunkNumber\);
-Console\.WriteLine\(</span>"Downloaded chunk {chunkNumber}");
-                        chunkNumber++;
+            BucketName = bucketName,
+            Key = objectKey
+        };
+
+        var metadataResponse = await s3Client.GetObjectMetadataAsync(metadataRequest);
+        return metadataResponse.ContentLength;
+    }
+
+    private static async Task<long> WriteChunkToFile(Stream responseStream, string chunkFilePath, long bytesToRead)
+    {
+        long bytesReadInChunk = 0;
+        byte[] buffer = new byte[8192];
+
+        using (var fileStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write))
+        {
+            int bytesRead;
+            while (bytesReadInChunk < bytesToRead && (bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                bytesReadInChunk += bytesRead;
+                await fileStream.WriteAsync(buffer, 0, bytesRead);
+            }
+        }
+
+        return bytesReadInChunk;
+    }
+
+    private static long GetLastNewlinePosition(string filePath)
+    {
+        long position = 0;
+        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+        using (var reader = new StreamReader(fileStream, Encoding.UTF8))
+        {
+            char[] buffer = new char[8192];
+            int charsRead;
+            while ((charsRead = reader.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                for (int i = charsRead - 1; i >= 0; i--)
+                {
+                    if (buffer[i] == '\n')
+                    {
+                        position = fileStream.Position - (charsRead - i - 1);
+                        return position;
                     }
                 }
             }
         }
+
+        return position;
     }
 
-    private async Task SaveChunkToFile(string chunk, int chunkNumber)
+    private static void AdjustFileToLastNewline(string filePath, long position)
     {
-        string fileName = Path.Combine(_downloadFolder, $"{_objectKey}-chunk-{chunkNumber}.txt"); // Adjust file extension and naming convention as needed
-        using (StreamWriter writer = new StreamWriter(fileName, false))
+        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Write))
         {
-            await writer.WriteAsync(chunk);
+            fileStream.SetLength(position);
         }
     }
 }
-
-public class ChunkReader
-{
-    private readonly Stream _stream;
-    private readonly long _chunkSize;
-    private readonly byte[] _buffer;
-
-    public ChunkReader(Stream stream, long chunkSize)
-    {
-        _stream = stream;
-        _chunkSize = chunkSize;
-        _buffer = new byte[chunkSize];
-    }
-
-    public async Task<string> ReadNextChunk()
-    {
-        long bytesToRead = _chunkSize;
-
-        while (_stream.CanRead && bytesToRead > 0)
-        {
-            int bytesRead = await _stream.ReadAsync(_buffer, 0, (int)Math.Min(bytesToRead, _buffer.Length));
-            if (bytesRead == 0) // End of stream
-            {
-                break;
-            }
-
-            string chunkData = Encoding.UTF8.GetString(_buffer, 0, bytesRead); // Adjust encoding based on your data
-            int newlinePos = chunkData.IndexOf('\n');
-
-            if (newlinePos >= 0)
-            {
-                string chunk = chunkData.Substring(0, newlinePos + 1);
-                return chunk;
-            }
-
-            bytesToRead -= bytesRead;
-        }
-
-        // Handle remaining data in the buffer if not a complete line
-        if (_stream.Position < _
