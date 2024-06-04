@@ -25,20 +25,14 @@ class S3FileChunkDownloader
         long totalBytesRead = 0;
         int chunkNumber = 0;
 
-        while (totalBytesRead < fileSize)
+        using (var response = await s3Client.GetObjectAsync(bucketName, objectKey))
+        using (var responseStream = response.ResponseStream)
         {
-            string chunkFilePath = $"chunk_{chunkNumber}.txt";
-            long bytesToRead = Math.Min(chunkSize, fileSize - totalBytesRead);
+            while (totalBytesRead < fileSize)
+            {
+                string chunkFilePath = $"chunk_{chunkNumber}.txt";
+                long bytesToRead = Math.Min(chunkSize, fileSize - totalBytesRead);
 
-            using (var getObjectRequest = new GetObjectRequest
-            {
-                BucketName = bucketName,
-                Key = objectKey,
-                ByteRange = new ByteRange(totalBytesRead, totalBytesRead + bytesToRead - 1)
-            })
-            using (var response = await s3Client.GetObjectAsync(getObjectRequest))
-            using (var responseStream = response.ResponseStream)
-            {
                 long bytesReadInChunk = await WriteChunkToFile(responseStream, chunkFilePath, bytesToRead);
 
                 long lastNewlinePosition = GetLastNewlinePosition(chunkFilePath);
