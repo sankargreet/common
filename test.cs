@@ -68,6 +68,7 @@ class S3FileChunkDownloader
     private static async Task<long> WriteChunkToFile(Stream responseStream, string chunkFilePath, long bytesToRead)
     {
         long bytesReadInChunk = 0;
+        long lastNewlinePosition = 0;
         byte[] buffer = new byte[8192];
 
         using (var fileStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write))
@@ -76,35 +77,28 @@ class S3FileChunkDownloader
             while (bytesReadInChunk < bytesToRead && (bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
             {
                 bytesReadInChunk += bytesRead;
+
+                // Search for the last newline character in the buffer
+                for (int i = 0; i < bytesRead; i++)
+                {
+                    if (buffer[i] == '\n')
+                    {
+                        lastNewlinePosition = bytesReadInChunk - (bytesRead - i - 1);
+                    }
+                }
+
                 await fileStream.WriteAsync(buffer, 0, bytesRead);
             }
         }
 
-        return bytesReadInChunk;
-    }
-
-    private static long GetLastNewlinePosition(string filePath)
-    {
-        long position = 0;
-        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-        using (var reader = new StreamReader(fileStream, Encoding.UTF8))
+        // Truncate the file to the last newline position if needed
+        if (lastNewlinePosition < bytesReadInChunk)
         {
-            char[] buffer = new char[8192];
-            int charsRead;
-            while ((charsRead = reader.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                for (int i = charsRead - 1; i >= 0; i--)
-                {
-                    if (buffer[i] == '\n')
-                    {
-                        position = fileStream.Position - (charsRead - i - 1);
-                        return position;
-                    }
-                }
-            }
+            AdjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
+            bytesReadInChunk = lastNewlinePosition;
         }
 
-        return position;
+        return bytesReadInChunk;
     }
 
     private static void AdjustFileToLastNewline(string filePath, long position)
