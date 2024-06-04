@@ -1,100 +1,103 @@
-using Amazon;
-using Amazon.S3;
-using Amazon.S3.Model;
-using System;
-using System.IO;
-using System.Text;
-using System.Threading.Tasks;
+import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 
-class S3FileChunkDownloader
-{
-    private static readonly string bucketName = "your-bucket-name";
-    private static readonly string objectKey = "your-large-file.txt";
-    private static readonly string region = "us-east-1"; // Replace with your region
-    private static readonly long chunkSize = 512 * 1024 * 1024; // 0.5 GB in bytes
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
-    public static async Task Main(string[] args)
-    {
-        var s3Client = new AmazonS3Client(RegionEndpoint.GetBySystemName(region));
-        await DownloadFileInChunksAsync(s3Client);
+public class S3FileChunkDownloader {
+
+    private static final String BUCKET_NAME = "your-bucket-name";
+    private static final String OBJECT_KEY = "your-large-file.txt";
+    private static final Region REGION = Region.US_EAST_1; // Replace with your region
+    private static final long CHUNK_SIZE = 512 * 1024 * 1024; // 0.5 GB in bytes
+
+    public static void main(String[] args) throws IOException {
+        S3Client s3Client = S3Client.builder()
+                .region(REGION)
+                .credentialsProvider(ProfileCredentialsProvider.create())
+                .build();
+
+        downloadFileInChunks(s3Client);
     }
 
-    private static async Task DownloadFileInChunksAsync(AmazonS3Client s3Client)
-    {
-        long fileSize = await GetFileSizeAsync(s3Client);
+    private static void downloadFileInChunks(S3Client s3Client) throws IOException {
+        long fileSize = getFileSize(s3Client);
         long totalBytesRead = 0;
         int chunkNumber = 0;
 
-        using (var response = await s3Client.GetObjectAsync(bucketName, objectKey))
-        using (var responseStream = response.ResponseStream)
-        {
-            while (totalBytesRead < fileSize)
-            {
-                string chunkFilePath = $"chunk_{chunkNumber}.txt";
-                long bytesToRead = Math.Min(chunkSize, fileSize - totalBytesRead);
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(BUCKET_NAME)
+                .key(OBJECT_KEY)
+                .build();
 
-                long bytesReadInChunk = await WriteChunkToFile(responseStream, chunkFilePath, bytesToRead);
+        try (InputStream responseStream = s3Client.getObject(getObjectRequest)) {
+            while (totalBytesRead < fileSize) {
+                String chunkFilePath = "chunk_" + chunkNumber + ".txt";
+                long bytesToRead = Math.min(CHUNK_SIZE, fileSize - totalBytesRead);
+
+                long bytesReadInChunk = writeChunkToFile(responseStream, chunkFilePath, bytesToRead);
 
                 totalBytesRead += bytesReadInChunk;
                 chunkNumber++;
+
+                if (bytesReadInChunk == 0) {
+                    break;
+                }
             }
         }
 
-        Console.WriteLine("Chunks downloaded successfully.");
+        System.out.println("Chunks downloaded successfully.");
     }
 
-    private static async Task<long> GetFileSizeAsync(AmazonS3Client s3Client)
-    {
-        var metadataRequest = new GetObjectMetadataRequest
-        {
-            BucketName = bucketName,
-            Key = objectKey
-        };
+    private static long getFileSize(S3Client s3Client) {
+        HeadObjectRequest headObjectRequest = HeadObjectRequest.builder()
+                .bucket(BUCKET_NAME)
+                .key(OBJECT_KEY)
+                .build();
 
-        var metadataResponse = await s3Client.GetObjectMetadataAsync(metadataRequest);
-        return metadataResponse.ContentLength;
+        HeadObjectResponse headObjectResponse = s3Client.headObject(headObjectRequest);
+        return headObjectResponse.contentLength();
     }
 
-    private static async Task<long> WriteChunkToFile(Stream responseStream, string chunkFilePath, long bytesToRead)
-    {
+    private static long writeChunkToFile(InputStream responseStream, String chunkFilePath, long bytesToRead) throws IOException {
         long bytesReadInChunk = 0;
         long lastNewlinePosition = 0;
         byte[] buffer = new byte[8192];
 
-        using (var fileStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write))
-        {
+        try (FileOutputStream fileOutputStream = new FileOutputStream(chunkFilePath)) {
             int bytesRead;
-            while (bytesReadInChunk < bytesToRead && (bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-            {
-                // Search for the last newline character in the buffer
-                for (int i = 0; i < bytesRead; i++)
-                {
-                    if (buffer[i] == '\n')
-                    {
-                        lastNewlinePosition = bytesReadInChunk + i + 1; // Position after the newline
+            while (bytesReadInChunk < bytesToRead && (bytesRead = responseStream.read(buffer)) > 0) {
+                bytesReadInChunk += bytesRead;
+
+                for (int i = 0; i < bytesRead; i++) {
+                    if (buffer[i] == '\n') {
+                        lastNewlinePosition = bytesReadInChunk - (bytesRead - i - 1);
                     }
                 }
 
-                await fileStream.WriteAsync(buffer, 0, bytesRead);
-                bytesReadInChunk += bytesRead;
+                fileOutputStream.write(buffer, 0, bytesRead);
             }
         }
 
-        // Truncate the file to the last newline position if needed
-        if (lastNewlinePosition < bytesReadInChunk)
-        {
-            AdjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
+        if (lastNewlinePosition < bytesReadInChunk) {
+            adjustFileToLastNewline(chunkFilePath, lastNewlinePosition);
             bytesReadInChunk = lastNewlinePosition;
         }
 
         return bytesReadInChunk;
     }
 
-    private static void AdjustFileToLastNewline(string filePath, long position)
-    {
-        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Write))
-        {
-            fileStream.SetLength(position);
+    private static void adjustFileToLastNewline(String filePath, long position) throws IOException {
+        try (FileOutputStream fileOutputStream = new FileOutputStream(filePath, true)) {
+            fileOutputStream.getChannel().truncate(position);
         }
     }
 }
