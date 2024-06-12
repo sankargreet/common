@@ -116,3 +116,35 @@ public class PostResponse
     public string Url { get; set; }
     public IDictionary<string, string> Fields { get; set; }
 }
+
+
+ static async Task UploadFileToS3Async(PostResponse postResponse, byte[] fileContent)
+    {
+        using (var client = new HttpClient())
+        {
+            using (var content = new MultipartFormDataContent())
+            {
+                foreach (var field in postResponse.Fields)
+                {
+                    content.Add(new StringContent(field.Value), field.Key);
+                }
+
+                var fileContentContent = new ByteArrayContent(fileContent);
+                fileContentContent.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+                fileContentContent.Headers.ContentMD5 = Convert.FromBase64String(postResponse.Fields["Content-MD5"]);
+
+                content.Add(fileContentContent, "file");
+
+                var response = await client.PostAsync(postResponse.Url, content);
+                if (response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine("File uploaded successfully.");
+                }
+                else
+                {
+                    Console.WriteLine("File upload failed. Status code: " + response.StatusCode);
+                }
+            }
+        }
+    }
+}
