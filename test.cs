@@ -5,12 +5,11 @@ using System.IO;
 using System.IO.Compression;
 using System.Threading.Tasks;
 
-class S3ZipFileDownloader
+class S3ZipFileExtractor
 {
     private static readonly string bucketName = "your-bucket-name";
     private static readonly string keyName = "your-zip-file.zip";
-    private static readonly string localFilePath = "/tmp/your-zip-file.zip"; // Local path in the pod
-    private static readonly string extractPath = "/tmp/unzipped-files"; // Path where files will be extracted
+    private static readonly string destinationFolder = "extracted-files/"; // S3 folder where files will be uploaded
 
     private static readonly AmazonS3Client s3Client = new AmazonS3Client();
 
@@ -18,19 +17,22 @@ class S3ZipFileDownloader
     {
         try
         {
-            // Step 1: Download the ZIP file from S3
-            Console.WriteLine("Downloading the ZIP file from S3...");
-            await DownloadZipFileFromS3();
+            // Step 1: Download the ZIP file from S3 into a memory stream
+            Console.WriteLine("Downloading the ZIP file from S3 into memory...");
+            using (MemoryStream zipStream = new MemoryStream())
+            {
+                await DownloadZipFileToStream(zipStream);
 
-            // Step 2: Unzip the file
-            Console.WriteLine("Unzipping the file...");
-            UnzipFile(localFilePath, extractPath);
+                // Step 2: Unzip the files in memory and upload them to S3
+                Console.WriteLine("Unzipping the file and uploading the contents to S3...");
+                await UnzipAndUploadFiles(zipStream);
+            }
 
-            Console.WriteLine("File unzipped successfully.");
+            Console.WriteLine("Files unzipped and uploaded to S3 successfully.");
         }
         catch (AmazonS3Exception e)
         {
-            Console.WriteLine($"Error downloading the file from S3: {e.Message}");
+            Console.WriteLine($"Error processing the file from S3: {e.Message}");
         }
         catch (Exception e)
         {
@@ -38,26 +40,40 @@ class S3ZipFileDownloader
         }
     }
 
-    private static async Task DownloadZipFileFromS3()
+    private static async Task DownloadZipFileToStream(MemoryStream zipStream)
     {
         using (GetObjectResponse response = await s3Client.GetObjectAsync(bucketName, keyName))
-        using (Stream responseStream = response.ResponseStream)
-        using (FileStream fileStream = new FileStream(localFilePath, FileMode.Create, FileAccess.Write))
         {
-            await responseStream.CopyToAsync(fileStream);
+            await response.ResponseStream.CopyToAsync(zipStream);
+            zipStream.Position = 0; // Reset stream position to the beginning
         }
-        Console.WriteLine($"File downloaded to {localFilePath}");
+        Console.WriteLine("ZIP file downloaded to memory.");
     }
 
-    private static void UnzipFile(string zipFilePath, string destinationPath)
+    private static async Task UnzipAndUploadFiles(MemoryStream zipStream)
     {
-        if (Directory.Exists(destinationPath))
+        using (ZipArchive archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
         {
-            Directory.Delete(destinationPath, true); // Clean up if directory already exists
-        }
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                Console.WriteLine($"Processing file: {entry.FullName}");
+                
+                using (Stream entryStream = entry.Open())
+                {
+                    string s3Key = destinationFolder + entry.FullName; // Define the destination path in S3
+                    
+                    var uploadRequest = new PutObjectRequest
+                    {
+                        BucketName = bucketName,
+                        Key = s3Key,
+                        InputStream = entryStream
+                    };
 
-        Directory.CreateDirectory(destinationPath);
-        ZipFile.ExtractToDirectory(zipFilePath, destinationPath);
-        Console.WriteLine($"Files extracted to {destinationPath}");
+                    // Upload each file extracted from the zip archive to S3
+                    await s3Client.PutObjectAsync(uploadRequest);
+                    Console.WriteLine($"Uploaded {entry.FullName} to S3 at {s3Key}");
+                }
+            }
+        }
     }
 }
