@@ -1,27 +1,28 @@
- using (var zipStream = new ZipArchive(Response.BodyWriter.AsStream(), ZipArchiveMode.Create, true))
-        {
-            foreach (var key in fileKeys)
+ foreach (var key in fileKeys)
             {
                 var request = new GetObjectRequest { BucketName = _bucketName, Key = key };
 
                 using (var response = await _s3Client.GetObjectAsync(request))
-                using (var entryStream = zipStream.CreateEntry(Path.GetFileName(key)).Open())
+                using (var s3Stream = response.ResponseStream)
                 {
-                    await DownloadFileInParts(response.ResponseStream, entryStream);
+                    // Check if the file is already a ZIP
+                    if (Path.GetExtension(key).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Copy the ZIP file directly without unzipping
+                        var zipEntry = zipStream.CreateEntry(Path.GetFileName(key));
+                        using (var entryStream = zipEntry.Open())
+                        {
+                            await s3Stream.CopyToAsync(entryStream);
+                        }
+                    }
+                    else
+                    {
+                        // Add non-ZIP files normally
+                        var entry = zipStream.CreateEntry(Path.GetFileName(key));
+                        using (var entryStream = entry.Open())
+                        {
+                            await DownloadFileInParts(s3Stream, entryStream);
+                        }
+                    }
                 }
             }
-        }
-
-        return new EmptyResult();
-    }
-
-    private async Task DownloadFileInParts(Stream sourceStream, Stream destinationStream, int partSizeMB = 5)
-    {
-        byte[] buffer = new byte[partSizeMB * 1024 * 1024]; // Multipart size in MB
-        int bytesRead;
-
-        while ((bytesRead = await sourceStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-        {
-            await destinationStream.WriteAsync(buffer, 0, bytesRead);
-        }
-    }
